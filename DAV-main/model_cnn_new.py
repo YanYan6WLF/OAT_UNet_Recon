@@ -18,6 +18,8 @@ from torch.autograd import Variable
 from collections import OrderedDict
 from torch.nn import init
 import numpy as np
+import matlab.engine 
+import matlab 
 
 
 
@@ -144,22 +146,48 @@ class Reg_net(nn.Module):
             self.weight_init(m)
 
 
-    def forward(self, xk, x_grad,xkm1,t=1.0):
-        if xkm1 is None:
-            xkm1 = torch.zeros_like(xk)
-    
-        out = self.layer1(xk)
-        out = self.layer2(out)
-        out = self.layer3(out)
-        out = self.layer4(out)
+    def forward (self,rawdata, n_iter,A,b, t=1.0): # Python does not allow the default parameter (t=1.0) to precede the non-default parameter (n_iter).
+        x0=rawdata
+        y1=x0.clone()
+        output = []
+        y=[]
+        
+        for iter in range(n_iter):
+            if iter ==0:
+                xkm1=x0
+                yk=y1
 
-        out = self.con2(out) + xk - self.con1(x_grad)
-        out = self.layer5(out)
-        
-        t_next = (1 + (1 + 4 * t**2)**0.5) / 2
-        self.beta = (t - 1) / t_next
-        momentum=self.beta*(xk-xkm1)
-        ykp1 = out +  momentum
-        #print(out.size())
-        
-        return ykp1
+            # A,b python numpy → matlab double
+            A_mat=matlab.double(A.tolist())
+            b_mat=matlab.double(b.tolist())
+            yk_mat=matlab.double(yk.numpy().tolist())
+            matlab.workspace['A'] = A_mat
+            matlab.workspace['b'] = b_mat
+            matlab.workspace['yk'] = yk_mat
+            gradup = matlab.eval("A'*(A*yk - b)", nargout=1) # question   
+            gradup = torch.tensor(np.array(gradup)).float().to(x0.device)
+
+
+            out = self.layer1(xkm1)
+            out = self.layer2(out)
+            out = self.layer3(out)
+            out = self.layer4(out)
+            
+            xk = self.con2(out) + yk - self.con1(gradup)
+            xk = self.layer5(xk)
+  
+            
+            t_next = (1 + (1 + 4 * t**2)**0.5) / 2
+            t=t_next
+            self.beta = (t - 1) / t_next
+            momentum=self.beta*(xk-xkm1)
+            ykp1 = xk +  momentum
+
+            yk=ykp1.clone()
+            y.append(ykp1)
+            xkm1=xk.clone()
+            output.append(xk.detach())
+
+
+            
+        return   output
